@@ -1,0 +1,25 @@
+/* src/index.css */
+@import "tailwindcss";
+
+/* 👇 MUY IMPORTANTE EN TAILWIND v4: dile dónde escanear clases */
+@source "../index.html";
+@source "./**/*.{ts,tsx,js,jsx}";
+
+/* Base mínima */
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #0b0c10;
+  color: white;
+}
+
+/* Fondo con halos */
+.bg-aurora {
+  background:
+    radial-gradient(60rem 60rem at 10% -10%, rgba(239,68,68,.15), transparent 70%),
+    radial-gradient(60rem 60rem at 90% 120%, rgba(56,189,248,.15), transparent 70%),
+    #0b0c10;
+}
