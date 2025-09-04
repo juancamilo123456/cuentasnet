@@ -24,6 +24,10 @@ type LatestMail = {
   text?: string | null;
 };
 
+/* ====== API base (Render o local) ====== */
+const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const api = (p: string) => (API_BASE ? `${API_BASE}${p}` : p);
+
 const PROVIDERS = [
   {
     key: "netflix",
@@ -357,7 +361,6 @@ function wrapEmailHtml(raw: string) {
 </html>`;
 }
 
-
 /* ===================== Visor ===================== */
 function LatestMailViewer({
   mail,
@@ -380,8 +383,13 @@ function LatestMailViewer({
         <div className="text-6xl mb-3">🔐</div>
         <p className="mb-4">Para continuar, autoriza el acceso de lectura a tu Gmail.</p>
         <a
-          href="/api/auth"
-          onClick={(e) => { if (onAuth) { e.preventDefault(); onAuth(); } }}
+          href={api("/api/auth")}
+          onClick={(e) => {
+            if (onAuth) {
+              e.preventDefault();
+              onAuth();
+            }
+          }}
           className="inline-flex items-center gap-2 rounded-2xl bg-white text-black font-semibold px-4 py-2"
         >
           Autorizar Gmail
@@ -429,36 +437,35 @@ function LatestMailViewer({
 
   const { ref, onLoad } = useAutoHeight();
 
- return (
-  <div className="max-w-6xl mx-auto px-6">
-    {/* Sin título ni marco exterior; solo el iframe limpio */}
-    <div className="mt-2">
-      {mail.html ? (
-        <iframe
-          ref={ref}
-          onLoad={onLoad}
-          title="email"
-          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-          style={{
-            width: "100%",
-            height: "80vh",
-            border: "none",
-            display: "block",
-            background: "transparent",
-          }}
-          srcDoc={wrapEmailHtml(mail.html || mail.text || "")}
-        />
-      ) : mail.text ? (
-        <pre className="text-white/90 whitespace-pre-wrap bg-black/80 p-6 rounded-[26px]">
-          {mail.text}
-        </pre>
-      ) : (
-        <div className="text-white/70 p-6">Sin contenido.</div>
-      )}
+  return (
+    <div className="max-w-6xl mx-auto px-6">
+      {/* Sin título ni marco exterior; solo el iframe limpio */}
+      <div className="mt-2">
+        {mail.html ? (
+          <iframe
+            ref={ref}
+            onLoad={onLoad}
+            title="email"
+            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+            style={{
+              width: "100%",
+              height: "80vh",
+              border: "none",
+              display: "block",
+              background: "transparent",
+            }}
+            srcDoc={wrapEmailHtml(mail.html || mail.text || "")}
+          />
+        ) : mail.text ? (
+          <pre className="text-white/90 whitespace-pre-wrap bg-black/80 p-6 rounded-[26px]">
+            {mail.text}
+          </pre>
+        ) : (
+          <div className="text-white/70 p-6">Sin contenido.</div>
+        )}
+      </div>
     </div>
-  </div>
-);
-
+  );
 }
 
 /* ===================== Página principal ===================== */
@@ -480,7 +487,7 @@ export default function CuentasNet() {
     setMail(null);
 
     try {
-      const res = await fetch("/api/mail/latest", {
+      const res = await fetch(api("/api/mail/latest"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -537,21 +544,22 @@ export default function CuentasNet() {
         loading={loading}
         needsAuth={needsAuth}
         errorMsg={errorMsg}
-        onAuth={() => { window.location.href = "/api/auth"; }}
+        onAuth={() => {
+          window.location.href = api("/api/auth");
+        }}
       />
 
-  <footer className="mt-16 py-10 text-center text-white/50 text-xs">
-  <a
-    href="https://wa.me/573207389394?text=Hola%20%C2%A1vi%20tu%20panel%20de%20c%C3%B3digos!"
-    target="_blank"
-    rel="noreferrer"
-    className="inline-flex items-center gap-2 text-white/60 hover:text-white transition underline underline-offset-4"
-    title="Escríbeme por WhatsApp"
-  >
-    Creado por Juan Camilo Castellanos
-  </a>
-</footer>
-
+      <footer className="mt-16 py-10 text-center text-white/50 text-xs">
+        <a
+          href="https://wa.me/573207389394?text=Hola%20%C2%A1vi%20tu%20panel%20de%20c%C3%B3digos!"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-2 text-white/60 hover:text-white transition underline underline-offset-4"
+          title="Escríbeme por WhatsApp"
+        >
+          Creado por Juan Camilo Castellanos
+        </a>
+      </footer>
     </div>
   );
 }
