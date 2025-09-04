@@ -1,4 +1,4 @@
-// api/server.js — Gmail + Netflix classifier (JS puro)
+// api/server.js — Gmail + Netflix classifier + Latest Mail
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -18,6 +18,10 @@ if (!REDIRECT_URI) {
   console.error('❌ Falta OAUTH_REDIRECT_URI en .env');
   process.exit(1);
 }
+if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+  console.error('❌ Falta GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET en .env');
+  process.exit(1);
+}
 
 // Auto-confirm hogar (opcional)
 const AUTO_CONFIRM_HOME = process.env.AUTO_CONFIRM_HOME === '1';
@@ -32,6 +36,15 @@ const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_SECRET,
   REDIRECT_URI
 );
+
+// guarda tokens refrescados para que no caduque el access_token
+oAuth2Client.on('tokens', (tokens) => {
+  try {
+    const current = hasToken() ? JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8')) : {};
+    const merged = { ...current, ...tokens };
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(merged, null, 2), 'utf8');
+  } catch { /* no-op */ }
+});
 
 /* ================ Whitelist ================ */
 function normalizeGmail(email) {
@@ -133,7 +146,7 @@ function decodeBody(data) {
   return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
 }
 
-// NUEVO: extrae **ambos** cuerpos (texto y HTML) recursivamente
+// extrae **ambos** cuerpos (texto y HTML) recursivamente
 function extractBodies(payload) {
   let plain = '';
   let html = '';
@@ -144,7 +157,7 @@ function extractBodies(payload) {
     if (Array.isArray(p.parts)) p.parts.forEach(walk);
   }
   walk(payload);
-  // fallback por si el cuerpo viene directo sin parts
+  // fallback
   if (!plain && payload?.mimeType === 'text/plain' && payload?.body?.data) plain = decodeBody(payload.body.data);
   if (!html  && payload?.mimeType === 'text/html'  && payload?.body?.data) html  = decodeBody(payload.body.data);
   const combined = [plain, html].filter(Boolean).join('\n');
@@ -157,10 +170,8 @@ function normalizeSpaces(s) {
 }
 function findFourDigitCode(text) {
   const t = normalizeSpaces(text);
-  // cerca de keywords
   const near = t.match(/(?:c[oó]digo|code|otp|inicio de sesi[oó]n|login|access|verify)[^0-9]{0,40}(\d(?:\D?\d){3})/i);
   if (near) return near[1].replace(/\D/g, '');
-  // fallback genérico con separadores
   const any = t.match(/(?<!\d)(\d)(?:\D)?(\d)(?:\D)?(\d)(?:\D)?(\d)(?!\d)/);
   if (any) return any.slice(1).join('');
   return null;
@@ -177,31 +188,39 @@ const WORDS = {
 };
 
 function classifyNetflix(subject, combinedBody) {
-  const subj = subject || '';
-  const txt  = combinedBody || '';
+  const subj = String(subject || '');
+  const txt  = String(combinedBody || '');
   const lc   = (subj + '\n' + txt).toLowerCase();
 
-  if (WORDS.passwordReset.test(lc)) return { kind: 'password_reset' };
-
-  // LINKS: ahora sí miramos dentro del HTML también (porque combined trae HTML + texto)
+  // Enlaces dentro del correo
   const links = [...(txt.match(RX_NETFLIX_LINK) || [])];
-  for (const link of links) {
-    try {
-      const u = new URL(link);
-      const path = u.pathname + u.search;
-      if (RX_HOME_PATH.test(path))   return { kind: 'home_link',   url: link };
-      if (RX_TRAVEL_PATH.test(path)) return { kind: 'travel_link', url: link };
-    } catch { /* ignore */ }
+
+  // --- HOME / HOUSEHOLD ---
+  const isHomeByLink = links.some(link => {
+    try { return RX_HOME_PATH.test(new URL(link).pathname + new URL(link).search); }
+    catch { return false; }
+  });
+  const isHomeByText = /\b(actualiza(r)?\s+tu\s+hogar|hogar con netflix|update (?:your )?household|update primary location)\b/i.test(lc);
+  if (isHomeByLink || isHomeByText) {
+    const homeUrl = links.find(link => {
+      try { const u = new URL(link); return RX_HOME_PATH.test(u.pathname + u.search); }
+      catch { return false; }
+    }) || null;
+    return { kind: 'home_link', url: homeUrl };
   }
 
-  // CÓDIGOS
-  const code = findFourDigitCode(txt);
-  if (code) {
-    if (WORDS.travel.test(lc)) return { kind: 'travel_code', code };
-    if (WORDS.access.test(lc)) return { kind: 'access_code', code };
-    return { kind: 'access_code', code };
+  // --- ACCESS TEMPORAL / TRAVEL ---
+  const isTravelByLink = links.some(link => {
+    try { return RX_TRAVEL_PATH.test(new URL(link).pathname + new URL(link).search); }
+    catch { return false; }
+  });
+  const isAccessTemporalByText = /\b(c[oó]digo de acceso temporal|temporary access code)\b/i.test(lc);
+
+  if (isTravelByLink || isAccessTemporalByText) {
+    return { kind: 'access_code' }; // mostramos el HTML completo; no necesitamos extraer dígitos
   }
 
+  // Nada de PIN, nuevo dispositivo, reset, etc.
   return { kind: 'other' };
 }
 
@@ -224,94 +243,99 @@ async function confirmHome(url) {
   }
 }
 
-/* ================ /api/codes ================ */
-app.get('/api/codes', async (req, res) => {
+/* ================ /api/mail/latest (FILTRADO) ================ */
+/** Trae el mensaje más reciente del alias que sea:
+ *   - "Tu código de acceso temporal" (access_code)
+ *   - "Actualizar hogar" (home_link)
+ * Si no hay ninguno, 404.
+ */
+app.post('/api/mail/latest', async (req, res) => {
   try {
-    const { provider = 'netflix', email, debug } = req.query;
-
-    if (!email || typeof email !== 'string') {
-      return res.status(400).json({ ok: false, error: 'Falta email' });
-    }
-    if (!isAllowedEmail(email)) {
-      return res.status(403).json({ ok: false, error: 'Email no autorizado' });
-    }
-    if (!hasToken()) {
-      return res.status(401).json({ ok: false, needsAuth: true });
-    }
+    const alias = (req.body?.alias || req.body?.email || '').toLowerCase().trim();
+    if (!alias) return res.status(400).json({ ok: false, error: 'Falta alias/email' });
+    if (!isAllowedEmail(alias)) return res.status(403).json({ ok: false, error: 'Email no autorizado' });
+    if (!hasToken()) return res.status(401).json({ ok: false, needsAuth: true });
 
     const g = gmail();
+    const aliasFilter = `(to:"${alias}" OR deliveredto:"${alias}")`;
 
-    // alias EXACTO
-    const rawEmail = String(email).toLowerCase().trim();
-    const aliasFilter = `(to:"${rawEmail}" OR deliveredto:"${rawEmail}")`;
+    // Reducimos a remitentes de Netflix para bajar ruido
+    const fromNetflix =
+      '(from:netflix.com OR from:account.netflix.com OR from:mailer.netflix.com OR ' +
+      'from:no-reply@account.netflix.com OR from:info@account.netflix.com OR ' +
+      'from:member@mailer.netflix.com OR from:accounts@netflix.com)';
 
-    // Query (últimos 2 días)
-    let q;
-    if (provider === 'netflix') {
-      q = [
-        '(from:netflix.com OR from:account.netflix.com OR from:mailer.netflix.com OR ' +
-          'from:no-reply@account.netflix.com OR from:info@account.netflix.com OR ' +
-          'from:member@mailer.netflix.com OR from:accounts@netflix.com)',
-        aliasFilter,
-        '(subject:("código" OR "acceso" OR "acceso temporal" OR "verificación" OR "viaje" OR "hogar" ' +
-          'OR "inicia sesión" OR "inicio de sesión" OR "access" OR "verify" OR "travel" OR "household"))',
-        'newer_than:2d',
-      ].join(' ');
-    } else {
-      q = `from:(${provider}) ${aliasFilter} newer_than:2d`;
+    const q = [aliasFilter, fromNetflix].join(' ');
+
+    const list = await g.users.messages.list({
+      userId: 'me',
+      q,
+      labelIds: ['INBOX'],
+      includeSpamTrash: false,
+      maxResults: 50, // si necesitas buscar más atrás, podemos paginar
+    });
+
+    const msgs = list.data.messages || [];
+    if (!msgs.length) {
+      return res.status(404).json({ ok: false, error: 'No se encontró ningún correo para ese alias.' });
     }
 
-    const list = await g.users.messages.list({ userId: 'me', q, maxResults: 50 });
-    const msgs = list.data.messages || [];
+    // Traemos detalles y ordenamos más reciente primero
+    const details = await Promise.all(
+      msgs.map(m => g.users.messages.get({ userId: 'me', id: m.id, format: 'full' }))
+    );
+    details.sort((a, b) => Number(b.data.internalDate || 0) - Number(a.data.internalDate || 0));
 
-    const debugInfo = { query: q, alias: rawEmail, count: msgs.length, sample: [] };
+    const allowedKinds = new Set(['access_code', 'home_link']);
+    let chosen = null;
 
-    let best = null;
-
-    for (const m of msgs) {
-      const full = await g.users.messages.get({ userId: 'me', id: m.id, format: 'full' });
-
-      const payload = full.data.payload;
-      const { combined } = extractBodies(payload);   // 👈 ahora HTML + texto
-      const headers = payload?.headers || [];
+    for (const d of details) {
+      const full = d.data;
+      const headers = full.payload?.headers || [];
       const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';
-      const at = new Date(Number(full.data.internalDate || Date.now())).toISOString();
-
-      if (debugInfo.sample.length < 5) debugInfo.sample.push(subject);
+      const { plain, html, combined } = extractBodies(full.payload);
 
       const cls = classifyNetflix(subject, combined);
+      if (!allowedKinds.has(cls.kind)) continue; // ignora PIN, nuevo dispositivo, etc.
 
-      // fuera reset/ruido
-      if (cls.kind === 'password_reset' || cls.kind === 'other') continue;
-
-      // base común del item
-      const base = {
-        kind: cls.kind,     // access_code | travel_code | travel_link | home_link
-        at,
-        subject,
-        preview: combined.slice(0, 180),
-        id: m.id,
-        provider: String(provider),
-        email: rawEmail,
-      };
-
-      if (cls.kind === 'home_link' || cls.kind === 'travel_link') {
-        best = { ...base, url: cls.url };
-        break;
-      }
-      if (cls.kind === 'travel_code' || cls.kind === 'access_code') {
-        best = { ...base, code: cls.code };
-        break;
-      }
+      chosen = { full, html, plain, kind: cls.kind };
+      break; // el más reciente que cumple
     }
 
-    if (debug) return res.json({ ok: true, provider, items: best ? [best] : [], debug: debugInfo });
-    return res.json({ ok: true, provider, items: best ? [best] : [] });
+    if (!chosen) {
+      return res.status(404).json({ ok: false, error: 'No hay correos de acceso temporal ni de actualizar hogar para ese alias.' });
+    }
+
+    const headers = {};
+    for (const h of chosen.full.payload?.headers || []) headers[h.name] = h.value;
+
+    return res.json({
+      ok: true,
+      kind: chosen.kind,
+      id: chosen.full.id,
+      threadId: chosen.full.threadId,
+      internalDate: chosen.full.internalDate,
+      snippet: chosen.full.snippet,
+      headers: {
+        from: headers['From'],
+        to: headers['To'],
+        deliveredTo: headers['Delivered-To'],
+        date: headers['Date'],
+        subject: headers['Subject'],
+      },
+      html: chosen.html || null,
+      text: chosen.html ? null : (chosen.plain || null),
+    });
   } catch (e) {
-    console.error('Error /api/codes:', e);
-    res.status(500).json({ ok: false, error: 'Error consultando Gmail' });
+    const ge = e?.response?.data?.error || e?.errors?.[0]?.message;
+    if (ge === 'invalid_grant') {
+      return res.status(401).json({ ok: false, needsAuth: true, error: 'Token caducado. Reautoriza Gmail.' });
+    }
+    console.error('Error /api/mail/latest:', e?.response?.data || e);
+    return res.status(500).json({ ok: false, error: 'Error consultando Gmail' });
   }
 });
+
 
 /* ================ Start ================ */
 app.listen(PORT, () => {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Search,
@@ -11,36 +11,19 @@ import {
   Link2,
   Timer,
   ChevronRight,
-  ExternalLink,
-  Clipboard,
-  ClipboardCheck,
 } from "lucide-react";
 
-/**
- * ===============================================
- * CuentasNet – Pantalla principal (UI)
- * ===============================================
- */
-
-/* ---------- Tipos que devuelve tu API ---------- */
-type BaseItem = { at: string; subject?: string; preview?: string };
-
-type HomeItem = BaseItem & {
-  kind: "home_link";
-  url: string;
-  action?: { status: "ok" | "expired" | "failed" | "pending"; message: string };
+/* ===================== Tipos ===================== */
+type LatestMail = {
+  ok: boolean;
+  id: string;
+  threadId: string;
+  internalDate?: string;
+  headers?: { subject?: string };
+  html?: string | null;
+  text?: string | null;
 };
 
-type TravelLinkItem = BaseItem & { kind: "travel_link"; url: string };
-
-type CodeItem = BaseItem & {
-  kind: "travel_code" | "access_code";
-  code: string;
-};
-
-type ResultItem = HomeItem | TravelLinkItem | CodeItem;
-
-/* ---------- Proveedores soportados y su UI ---------- */
 const PROVIDERS = [
   {
     key: "netflix",
@@ -76,10 +59,9 @@ const PROVIDERS = [
     ],
   },
 ] as const;
-
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
 
-/* ---------- Componente helper con estilo glass ---------- */
+/* ===================== UI helpers ===================== */
 function GlassCard({
   children,
   className = "",
@@ -102,7 +84,6 @@ function GlassCard({
   );
 }
 
-/* ---------- Header ---------- */
 function Header() {
   return (
     <header className="w-full pt-10 pb-8">
@@ -121,7 +102,6 @@ function Header() {
   );
 }
 
-/* ---------- Hero ---------- */
 function Hero() {
   return (
     <section className="max-w-4xl mx-auto px-6 text-center">
@@ -142,7 +122,6 @@ function Hero() {
   );
 }
 
-/* ---------- Tarjeta de proveedor ---------- */
 function ProviderCard({
   p,
   active,
@@ -167,10 +146,7 @@ function ProviderCard({
           <h3 className="text-white text-lg font-semibold">{p.title}</h3>
           <div className="mt-4 grid gap-2">
             {p.perks.map(({ icon: Icon, text }) => (
-              <div
-                key={text}
-                className="flex items-center gap-2 text-white/80 text-sm"
-              >
+              <div key={text} className="flex items-center gap-2 text-white/80 text-sm">
                 <Icon className="w-4 h-4" />
                 <span>{text}</span>
               </div>
@@ -182,7 +158,6 @@ function ProviderCard({
   );
 }
 
-/* ---------- Buscador por email ---------- */
 function EmailSearch({
   email,
   setEmail,
@@ -212,12 +187,8 @@ function EmailSearch({
         </h4>
 
         <div className="mt-6 grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3">
-          {/* Email */}
           <div className="relative">
-            <Mail
-              className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/60"
-              aria-hidden="true"
-            />
+            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/60" />
             <input
               type="email"
               inputMode="email"
@@ -230,7 +201,6 @@ function EmailSearch({
             />
           </div>
 
-          {/* Proveedor */}
           <select
             aria-label="Proveedor"
             value={provider}
@@ -242,7 +212,6 @@ function EmailSearch({
             <option value="multi">Otro</option>
           </select>
 
-          {/* Botón */}
           <button
             type="submit"
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-white to-white/80 text-black font-semibold px-5 py-3 disabled:opacity-60"
@@ -264,167 +233,141 @@ function EmailSearch({
   );
 }
 
-/* ---------- Helpers UI ---------- */
-function timeStr(iso: string) {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
-function Badge({
-  color = "slate",
-  children,
-}: {
-  color?: "green" | "red" | "yellow" | "slate" | "blue";
-  children: React.ReactNode;
-}) {
-  const map: Record<string, string> = {
-    green: "bg-green-500/15 text-green-300 ring-1 ring-inset ring-green-500/30",
-    red: "bg-red-500/15 text-red-300 ring-1 ring-inset ring-red-500/30",
-    yellow:
-      "bg-yellow-500/15 text-yellow-200 ring-1 ring-inset ring-yellow-500/30",
-    blue: "bg-blue-500/15 text-blue-200 ring-1 ring-inset ring-blue-500/30",
-    slate: "bg-white/10 text-white/80 ring-1 ring-inset ring-white/15",
+/* -------- Auto-height para iframe (srcDoc = same-origin) -------- */
+function useAutoHeight() {
+  const ref = useRef<HTMLIFrameElement | null>(null);
+  const onLoad = () => {
+    const el = ref.current;
+    if (!el) return;
+    try {
+      const doc = el.contentDocument;
+      if (!doc) return;
+      const h = Math.min(Math.max(doc.body.scrollHeight, 560), 1400);
+      el.style.height = `${h}px`;
+    } catch {}
   };
-  return (
-    <span className={`px-2 py-1 rounded-xl text-xs ${map[color]}`}>
-      {children}
-    </span>
-  );
+  return { ref, onLoad };
 }
 
-function CopyCode({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(code);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch {}
-      }}
-      className="inline-flex items-center gap-2 rounded-xl bg-white text-black font-semibold px-3 py-2"
-      title="Copiar código"
-    >
-      {copied ? (
-        <ClipboardCheck className="w-4 h-4" />
-      ) : (
-        <Clipboard className="w-4 h-4" />
-      )}
-      {copied ? "¡Copiado!" : "Copiar"}
-    </button>
-  );
-}
+/* ===========================================================
+   wrapEmailHtml – tarjetita negra, angosta y sin grises
+   (sin scripts; todo se hace antes de entrar al iframe)
+   =========================================================== */
+function wrapEmailHtml(raw: string) {
+  if (!raw) return raw;
 
-/* ---------- Render de cada resultado ---------- */
-function ResultCard({ it }: { it: ResultItem }) {
-  if (it.kind === "home_link") {
-    const st = it.action?.status || "pending";
-    const badge =
-      st === "ok"
-        ? { color: "green" as const, text: "Hogar actualizado" }
-        : st === "expired"
-        ? { color: "red" as const, text: "Enlace expirado" }
-        : st === "failed"
-        ? { color: "red" as const, text: "No se pudo actualizar" }
-        : { color: "blue" as const, text: "Listo para actualizar" };
+  // 1) Parse: intenta extraer el bloque "blanco" principal
+  let primaryInner = "";
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(raw, "text/html");
 
-    return (
-      <li className="p-4 flex flex-col gap-2 text-white">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-left">
-            <div className="font-semibold">Enlace de actualización de hogar</div>
-            <div className="text-white/60 text-sm">
-              {it.subject ?? "Netflix hogar"}
-            </div>
-          </div>
-          <Badge color={badge.color}>{badge.text}</Badge>
-        </div>
-
-        <div className="text-white/60 text-sm">{timeStr(it.at)}</div>
-
-        <div className="mt-2">
-          <a
-            href={it.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 rounded-xl bg-white text-black font-semibold px-3 py-2"
-          >
-            Abrir en Netflix <ExternalLink className="w-4 h-4" />
-          </a>
-        </div>
-      </li>
+    const candidates = Array.from(doc.querySelectorAll<HTMLElement>("*")).filter(
+      (el) => {
+        const bg = (el.getAttribute("bgcolor") || "").toLowerCase();
+        const st = (el.getAttribute("style") || "").toLowerCase();
+        const hasWhite =
+          bg.includes("#fff") ||
+          bg === "white" ||
+          st.includes("background:#fff") ||
+          st.includes("background:#ffffff") ||
+          st.includes("background-color:#fff") ||
+          st.includes("background-color:#ffffff");
+        return hasWhite && el.innerHTML.trim().length > 200;
+      }
     );
+
+    if (candidates.length) {
+      candidates.sort((a, b) => b.innerHTML.length - a.innerHTML.length);
+      primaryInner = candidates[0].innerHTML;
+    } else {
+      primaryInner = doc.body ? doc.body.innerHTML : raw;
+    }
+  } catch {
+    primaryInner = raw;
   }
 
-  if (it.kind === "travel_link") {
-    return (
-      <li className="p-4 flex flex-col gap-2 text-white">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-left">
-            <div className="font-semibold">Enlace de verificación por viaje</div>
-            <div className="text-white/60 text-sm">
-              {it.subject ?? "Netflix viaje"}
-            </div>
-          </div>
-          <Badge color="slate">Enlace</Badge>
-        </div>
+  // 2) Estilos del visor (tarjeta negra angosta, sin grises)
+  const css = `
+    :root { color-scheme: dark; }
+    html, body { margin: 0; padding: 0; background: transparent !important; }
+    a { color: inherit !important; text-decoration: underline; }
 
-        <div className="text-white/60 text-sm">{timeStr(it.at)}</div>
+    /* Contenedor centrado sin marco externo */
+    .cn-wrap {
+      padding: 0;
+      background: transparent !important;
+      display: flex;
+      justify-content: center;
+    }
 
-        <div className="mt-2">
-          <a
-            href={it.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 rounded-xl bg-white text-black font-semibold px-3 py-2"
-          >
-            Abrir verificación <ExternalLink className="w-4 h-4" />
-          </a>
-        </div>
-      </li>
-    );
-  }
+    /* Tarjeta más angosta y formal */
+    .cn-card {
+      background: #0b0c10;       /* negro elegante */
+      color: #f2f4f7;
+      width: 100%;
+      max-width: 560px;          /* << más angosto */
+      border-radius: 24px;       /* bordes bien redondeados */
+      overflow: hidden;
+      box-shadow: 0 18px 48px rgba(0,0,0,.40); /* sombra más discreta */
+      border: 1px solid rgba(255,255,255,.08);
+    }
+    .cn-inner { padding: 8px 14px 14px; }
 
-  // Códigos
-  const label =
-    it.kind === "travel_code" ? "Código de viaje" : "Código de acceso";
-  return (
-    <li className="p-4 flex flex-col gap-3 text-white">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-left">
-          <div className="font-semibold">{label}</div>
-          <div className="text-white/60 text-sm">{it.subject ?? "Netflix"}</div>
-        </div>
-        <Badge color="slate">Código</Badge>
+    /* Quitar backgrounds heredados (grises externos) */
+    table, td, tr, body, html { background: transparent !important; }
+    [bgcolor], [style*="background:"], [style*="background-color:"] {
+      background: transparent !important;
+    }
+
+    /* Mantener CTA rojo de Netflix */
+    [style*="#e50914"], [bgcolor="#e50914"] {
+      background: #e50914 !important; color: #fff !important;
+    }
+
+    /* Tipografía consistente y clara */
+    .cn-card, .cn-card * {
+      color: #f2f4f7 !important;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    /* Imágenes fluidas y tablas responsivas */
+    img { max-width: 100% !important; height: auto !important; display: block; }
+    table { width: 100% !important; border-collapse: collapse !important; }
+  `;
+
+  const base = `<base target="_blank">`;
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  ${base}
+  <style>${css}</style>
+</head>
+<body>
+  <div class="cn-wrap">
+    <div class="cn-card">
+      <div class="cn-inner">
+        ${primaryInner}
       </div>
-
-      <div className="text-white/60 text-sm">{timeStr(it.at)}</div>
-
-      <div className="mt-1 flex items-center gap-3">
-        <div className="text-3xl md:text-4xl font-extrabold tracking-[0.35em]">
-          {it.code}
-        </div>
-        <CopyCode code={it.code} />
-      </div>
-    </li>
-  );
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
-/* ---------- Lista de resultados + estados ---------- */
-function Results({
-  items,
+
+/* ===================== Visor ===================== */
+function LatestMailViewer({
+  mail,
   searched,
   loading,
   needsAuth,
   errorMsg,
   onAuth,
 }: {
-  items: ResultItem[];
+  mail: LatestMail | null;
   searched: boolean;
   loading: boolean;
   needsAuth?: boolean;
@@ -438,12 +381,7 @@ function Results({
         <p className="mb-4">Para continuar, autoriza el acceso de lectura a tu Gmail.</p>
         <a
           href="/api/auth"
-          onClick={(e) => {
-            if (onAuth) {
-              e.preventDefault();
-              onAuth();
-            }
-          }}
+          onClick={(e) => { if (onAuth) { e.preventDefault(); onAuth(); } }}
           className="inline-flex items-center gap-2 rounded-2xl bg-white text-black font-semibold px-4 py-2"
         >
           Autorizar Gmail
@@ -460,14 +398,11 @@ function Results({
     );
   }
 
-  if (!searched && !items.length) {
+  if (!searched && !mail && !loading) {
     return (
       <div className="max-w-6xl mx-auto px-6 py-16 text-center text-white/70">
         <div className="text-7xl mb-4">🔍</div>
-        <p>
-          Selecciona un servicio e ingresa tu correo electrónico para buscar tus
-          códigos de acceso
-        </p>
+        <p>Ingresa tu correo y buscaremos el correo más reciente.</p>
       </div>
     );
   }
@@ -480,68 +415,90 @@ function Results({
     );
   }
 
-  if (searched && !items.length) {
+  if (!mail) {
     return (
       <div className="max-w-6xl mx-auto px-6 py-16 text-center text-white/80">
         <div className="text-6xl mb-3">📭</div>
         <h4 className="text-xl font-semibold mb-1">Correo no encontrado</h4>
         <p className="text-white/70 max-w-xl mx-auto">
-          No se hallaron mensajes recientes con códigos o enlaces. Verifica el
-          correo escrito o inténtalo de nuevo en un momento.
+          No se hallaron mensajes para ese alias. Verifica el correo escrito.
         </p>
       </div>
     );
   }
 
-  return (
-    <div className="max-w-6xl mx-auto px-6">
-      <GlassCard className="p-2 sm:p-4">
-        <ul className="divide-y divide-white/10">
-          {items.map((it, idx) => (
-            <ResultCard key={idx} it={it} />
-          ))}
-        </ul>
-      </GlassCard>
+  const { ref, onLoad } = useAutoHeight();
+
+ return (
+  <div className="max-w-6xl mx-auto px-6">
+    {/* Sin título ni marco exterior; solo el iframe limpio */}
+    <div className="mt-2">
+      {mail.html ? (
+        <iframe
+          ref={ref}
+          onLoad={onLoad}
+          title="email"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          style={{
+            width: "100%",
+            height: "80vh",
+            border: "none",
+            display: "block",
+            background: "transparent",
+          }}
+          srcDoc={wrapEmailHtml(mail.html || mail.text || "")}
+        />
+      ) : mail.text ? (
+        <pre className="text-white/90 whitespace-pre-wrap bg-black/80 p-6 rounded-[26px]">
+          {mail.text}
+        </pre>
+      ) : (
+        <div className="text-white/70 p-6">Sin contenido.</div>
+      )}
     </div>
-  );
+  </div>
+);
+
 }
 
-/* ---------- Página principal ---------- */
+/* ===================== Página principal ===================== */
 export default function CuentasNet() {
   const [selected, setSelected] = useState<ProviderKey>("netflix");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState<ResultItem[]>([]);
   const [searched, setSearched] = useState(false);
   const [needsAuth, setNeedsAuth] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [mail, setMail] = useState<LatestMail | null>(null);
 
-  // Mantener por si más adelante se usa info del proveedor
   useMemo(() => PROVIDERS.find((p) => p.key === selected), [selected]);
 
   const search = async () => {
     setLoading(true);
     setErrorMsg(null);
     setNeedsAuth(false);
+    setMail(null);
 
     try {
-      const url = `/api/codes?provider=${encodeURIComponent(
-        selected
-      )}&email=${encodeURIComponent(email)}`;
-      const res = await fetch(url);
-      const data = await res.json().catch(() => ({}));
+      const res = await fetch("/api/mail/latest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          alias: email.trim().toLowerCase(),
+          restrict: "netflix_access_or_home",
+        }),
+      });
 
-      if (res.status === 401 || (data && data.needsAuth)) {
-        setItems([]);
+      const data: LatestMail | any = await res.json().catch(() => ({}));
+
+      if (res.status === 401 || data?.needsAuth) {
         setNeedsAuth(true);
-      } else if (data && data.ok) {
-        setItems((data.items || []) as ResultItem[]);
+      } else if (res.ok && data?.ok) {
+        setMail(data as LatestMail);
       } else {
-        setItems([]);
-        setErrorMsg(data?.error || "No fue posible realizar la búsqueda");
+        setErrorMsg(data?.error || "No fue posible obtener el correo");
       }
     } catch {
-      setItems([]);
       setErrorMsg("No se pudo conectar con el servidor");
     } finally {
       setSearched(true);
@@ -554,7 +511,6 @@ export default function CuentasNet() {
       <Header />
       <Hero />
 
-      {/* Tarjetas de proveedores */}
       <section className="max-w-6xl mx-auto px-6 mt-10 grid gap-5 md:grid-cols-3 pb-2">
         {PROVIDERS.map((p) => (
           <ProviderCard
@@ -566,7 +522,6 @@ export default function CuentasNet() {
         ))}
       </section>
 
-      {/* Buscador por email */}
       <EmailSearch
         email={email}
         setEmail={setEmail}
@@ -576,21 +531,27 @@ export default function CuentasNet() {
         loading={loading}
       />
 
-      {/* Resultados / estados */}
-      <Results
-        items={items}
+      <LatestMailViewer
+        mail={mail}
         searched={searched}
         loading={loading}
         needsAuth={needsAuth}
         errorMsg={errorMsg}
-        onAuth={() => {
-          window.location.href = "/api/auth";
-        }}
+        onAuth={() => { window.location.href = "/api/auth"; }}
       />
 
-      <footer className="mt-16 py-10 text-center text-white/50 text-xs">
-        Creado por Juan Camilo Castellanos
-      </footer>
+  <footer className="mt-16 py-10 text-center text-white/50 text-xs">
+  <a
+    href="https://wa.me/573207389394?text=Hola%20%C2%A1vi%20tu%20panel%20de%20c%C3%B3digos!"
+    target="_blank"
+    rel="noreferrer"
+    className="inline-flex items-center gap-2 text-white/60 hover:text-white transition underline underline-offset-4"
+    title="Escríbeme por WhatsApp"
+  >
+    Creado por Juan Camilo Castellanos
+  </a>
+</footer>
+
     </div>
   );
 }
