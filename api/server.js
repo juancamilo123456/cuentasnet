@@ -1,25 +1,27 @@
-// api/server.js — Gmail + Netflix classifier + Latest Mail
+// api/server.js — Gmail + Netflix classifier + Latest Mail (refactor a Postgres tokens)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { google } from 'googleapis';
-import fs from 'node:fs';
-import path from 'node:path';
+import { createRequire } from 'module';
 
-const app = express();
+const require = createRequire(import.meta.url);
+// tokenStore debe estar en api/lib/tokenStore.js (CommonJS)
+const { saveToken, loadAnyToken } = require('./lib/tokenStore.js');
 
 /* ================== Config ================== */
+const app = express();
+
 const PORT = Number(process.env.PORT || 3001);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
-const TOKEN_PATH = path.join(process.cwd(), '.token.json');
 
 const REDIRECT_URI = process.env.OAUTH_REDIRECT_URI;
 if (!REDIRECT_URI) {
-  console.error('❌ Falta OAUTH_REDIRECT_URI en .env');
+  console.error('❌ Falta OAUTH_REDIRECT_URI en env');
   process.exit(1);
 }
 if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-  console.error('❌ Falta GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET en .env');
+  console.error('❌ Falta GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET en env');
   process.exit(1);
 }
 
@@ -30,21 +32,12 @@ const NETFLIX_CONFIRM_HOME_URL = process.env.NETFLIX_CONFIRM_HOME_URL || '';
 app.use(cors({ origin: FRONTEND_ORIGIN, credentials: false }));
 app.use(express.json());
 
-/* ================ OAuth2 ================= */
-const oAuth2Client = new google.auth.OAuth2(
+/* ================ OAuth2 (cliente base) ================= */
+const baseOAuth2 = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   REDIRECT_URI
 );
-
-// guarda tokens refrescados para que no caduque el access_token
-oAuth2Client.on('tokens', (tokens) => {
-  try {
-    const current = hasToken() ? JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8')) : {};
-    const merged = { ...current, ...tokens };
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(merged, null, 2), 'utf8');
-  } catch { /* no-op */ }
-});
 
 /* ================ Whitelist ================ */
 function normalizeGmail(email) {
@@ -74,34 +67,64 @@ function isAllowedEmail(email) {
   return false;
 }
 
-/* ================ Token helpers ================ */
-function hasToken() { return fs.existsSync(TOKEN_PATH); }
-function loadToken() {
-  if (!hasToken()) return null;
-  try {
-    const raw = fs.readFileSync(TOKEN_PATH, 'utf8');
-    const tok = JSON.parse(raw);
-    oAuth2Client.setCredentials(tok);
-    return tok;
-  } catch { return null; }
-}
-function saveToken(tok) {
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tok, null, 2), 'utf8');
+/* ================ Helpers de Gmail (DB + auto-refresh) ================ */
+async function getGmail() {
+  // Para tu caso (una sola cuenta), usamos "cualquier" token guardado
+  const t = await loadAnyToken();
+  if (!t) {
+    const err = new Error('NO_AUTH');
+    err.code = 'NO_AUTH';
+    throw err;
+  }
+
+  const o2 = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    REDIRECT_URI
+  );
+
+  o2.setCredentials({
+    access_token: t.access_token,
+    refresh_token: t.refresh_token,
+    expiry_date: t.expiry,
+  });
+
+  // Refresca si está por vencer (<60s)
+  if (!t.expiry || Date.now() > t.expiry - 60_000) {
+    const { credentials } = await o2.refreshAccessToken();
+    await saveToken({
+      sub: t.sub,
+      email: t.email,
+      access_token: credentials.access_token,
+      refresh_token: credentials.refresh_token || t.refresh_token,
+      expiry: credentials.expiry_date,
+    });
+    o2.setCredentials(credentials);
+  }
+
+  return google.gmail({ version: 'v1', auth: o2 });
 }
 
 /* ================ OAuth endpoints ================ */
-app.get('/api/auth/status', (_req, res) => {
-  res.json({ ok: true, authorized: hasToken() });
+app.get('/api/auth/status', async (_req, res) => {
+  const t = await loadAnyToken();
+  res.json({ ok: true, authorized: !!t, email: t?.email ?? null });
 });
-function handleAuthUrl(req, res) {
+
+async function handleAuthUrl(req, res) {
   const scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
-  const url = oAuth2Client.generateAuthUrl({
+
+  // Sólo pedimos "consent" si aún NO tenemos refresh_token guardado
+  const existing = await loadAnyToken();
+  const url = baseOAuth2.generateAuthUrl({
     access_type: 'offline',
     include_granted_scopes: true,
-    prompt: 'consent',
     scope: scopes,
     redirect_uri: REDIRECT_URI,
+    prompt: existing ? undefined : 'consent',
+    // opcional: login_hint: req.query.email
   });
+
   if ((req.headers.accept || '').includes('application/json')) return res.json({ ok: true, url });
   return res.redirect(url);
 }
@@ -112,13 +135,32 @@ app.get('/api/oauth2/callback', async (req, res) => {
   try {
     const { code } = req.query;
     if (!code) return res.status(400).send('Falta "code".');
-    const { tokens } = await oAuth2Client.getToken(code);
-    saveToken(tokens);
-    oAuth2Client.setCredentials(tokens);
-    const back = FRONTEND_ORIGIN.replace(/\/$/, '');
-    res.send(`<h2>✅ Autorizado.</h2><p>Ya puedes cerrar esta pestaña y volver a <a href="${back}">${back}</a>.</p>`);
+
+    const { tokens } = await baseOAuth2.getToken(code);
+
+    // Identidad estable (sub) + email desde id_token
+    const ticket = await baseOAuth2.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const sub = payload.sub;
+    const email = payload.email;
+
+    await saveToken({
+      sub,
+      email,
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token, // ¡clave!
+      expiry: tokens.expiry_date,
+    });
+
+    const back = String(FRONTEND_ORIGIN).replace(/\/$/, '');
+    res.send(
+      `<h2>✅ Autorizado.</h2><p>Ya puedes cerrar esta pestaña y volver a <a href="${back}">${back}</a>.</p>`
+    );
   } catch (e) {
-    console.error('OAuth callback error:', e);
+    console.error('OAuth callback error:', e?.response?.data || e);
     res.status(500).send('Error intercambiando el código OAuth.');
   }
 });
@@ -126,21 +168,20 @@ app.get('/api/oauth2/callback', async (req, res) => {
 // ¿Qué cuenta está autorizada?
 app.get('/api/whoami', async (_req, res) => {
   try {
-    if (!hasToken()) return res.status(401).json({ ok: false, error: 'No autorizado' });
-    loadToken();
-    const g = google.gmail({ version: 'v1', auth: oAuth2Client });
+    const g = await getGmail();
     const profile = await g.users.getProfile({ userId: 'me' });
-    res.json({ ok: true, emailAddress: profile.data.emailAddress, messagesTotal: profile.data.messagesTotal });
-  } catch {
+    res.json({
+      ok: true,
+      emailAddress: profile.data.emailAddress,
+      messagesTotal: profile.data.messagesTotal,
+    });
+  } catch (e) {
+    if (e?.code === 'NO_AUTH') return res.status(401).json({ ok: false, error: 'No autorizado' });
     res.status(500).json({ ok: false, error: 'No se pudo obtener el perfil' });
   }
 });
 
-/* ================ Gmail helpers ================ */
-function gmail() {
-  loadToken();
-  return google.gmail({ version: 'v1', auth: oAuth2Client });
-}
+/* ================ Gmail body helpers ================ */
 function decodeBody(data) {
   if (!data) return '';
   return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
@@ -153,13 +194,13 @@ function extractBodies(payload) {
   function walk(p) {
     if (!p) return;
     if (p.mimeType === 'text/plain' && p.body?.data) plain += decodeBody(p.body.data) + '\n';
-    if (p.mimeType === 'text/html'  && p.body?.data) html  += decodeBody(p.body.data)  + '\n';
+    if (p.mimeType === 'text/html' && p.body?.data) html += decodeBody(p.body.data) + '\n';
     if (Array.isArray(p.parts)) p.parts.forEach(walk);
   }
   walk(payload);
   // fallback
   if (!plain && payload?.mimeType === 'text/plain' && payload?.body?.data) plain = decodeBody(payload.body.data);
-  if (!html  && payload?.mimeType === 'text/html'  && payload?.body?.data) html  = decodeBody(payload.body.data);
+  if (!html && payload?.mimeType === 'text/html' && payload?.body?.data) html = decodeBody(payload.body.data);
   const combined = [plain, html].filter(Boolean).join('\n');
   return { plain, html, combined };
 }
@@ -217,7 +258,7 @@ function classifyNetflix(subject, combinedBody) {
   const isAccessTemporalByText = /\b(c[oó]digo de acceso temporal|temporary access code)\b/i.test(lc);
 
   if (isTravelByLink || isAccessTemporalByText) {
-    return { kind: 'access_code' }; // mostramos el HTML completo; no necesitamos extraer dígitos
+    return { kind: 'access_code' };
   }
 
   // Nada de PIN, nuevo dispositivo, reset, etc.
@@ -254,9 +295,11 @@ app.post('/api/mail/latest', async (req, res) => {
     const alias = (req.body?.alias || req.body?.email || '').toLowerCase().trim();
     if (!alias) return res.status(400).json({ ok: false, error: 'Falta alias/email' });
     if (!isAllowedEmail(alias)) return res.status(403).json({ ok: false, error: 'Email no autorizado' });
-    if (!hasToken()) return res.status(401).json({ ok: false, needsAuth: true });
 
-    const g = gmail();
+    const t = await loadAnyToken();
+    if (!t) return res.status(401).json({ ok: false, needsAuth: true });
+
+    const g = await getGmail(); // cliente con auto-refresh
     const aliasFilter = `(to:"${alias}" OR deliveredto:"${alias}")`;
 
     // Reducimos a remitentes de Netflix para bajar ruido
@@ -272,7 +315,7 @@ app.post('/api/mail/latest', async (req, res) => {
       q,
       labelIds: ['INBOX'],
       includeSpamTrash: false,
-      maxResults: 50, // si necesitas buscar más atrás, podemos paginar
+      maxResults: 50,
     });
 
     const msgs = list.data.messages || [];
@@ -328,14 +371,13 @@ app.post('/api/mail/latest', async (req, res) => {
     });
   } catch (e) {
     const ge = e?.response?.data?.error || e?.errors?.[0]?.message;
-    if (ge === 'invalid_grant') {
-      return res.status(401).json({ ok: false, needsAuth: true, error: 'Token caducado. Reautoriza Gmail.' });
+    if (e?.code === 'NO_AUTH' || ge === 'invalid_grant') {
+      return res.status(401).json({ ok: false, needsAuth: true, error: 'No autorizado o token caducado.' });
     }
     console.error('Error /api/mail/latest:', e?.response?.data || e);
     return res.status(500).json({ ok: false, error: 'Error consultando Gmail' });
   }
 });
-
 
 /* ================ Start ================ */
 app.listen(PORT, () => {
