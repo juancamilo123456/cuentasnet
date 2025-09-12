@@ -131,37 +131,33 @@ async function handleAuthUrl(req, res) {
 app.get('/api/auth', handleAuthUrl);
 app.get('/api/oauth2/auth', handleAuthUrl);
 
+// --- reemplaza COMPLETO tu handler actual ---
 app.get('/api/oauth2/callback', async (req, res) => {
   try {
     const { code } = req.query;
     if (!code) return res.status(400).send('Falta "code".');
 
-    const { tokens } = await baseOAuth2.getToken(code);
+    // usa EXACTAMENTE el mismo redirect_uri que usaste al generar el auth URL
+    const { tokens } = await baseOAuth2.getToken({ code, redirect_uri: REDIRECT_URI });
+    baseOAuth2.setCredentials(tokens);
 
-    // Identidad estable (sub) + email desde id_token
-    const ticket = await baseOAuth2.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-    const payload = ticket.getPayload();
-    const sub = payload.sub;
-    const email = payload.email;
-
+    // trae identidad (email) para guardar quien autorizó
+    const oauth2 = google.oauth2({ auth: baseOAuth2, version: 'v2' });
+    const { data } = await oauth2.userinfo.get();   // -> { id, email, ... }
     await saveToken({
-      sub,
-      email,
+      sub: data.id,
+      email: data.email,
       access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token, // ¡clave!
-      expiry: tokens.expiry_date,
+      refresh_token: tokens.refresh_token, // 1ª vez debe venir
+      expiry: tokens.expiry_date
     });
 
     const back = String(FRONTEND_ORIGIN).replace(/\/$/, '');
-    res.send(
-      `<h2>✅ Autorizado.</h2><p>Ya puedes cerrar esta pestaña y volver a <a href="${back}">${back}</a>.</p>`
-    );
+    res.send(`<h2>✅ Autorizado.</h2><p>Ya puedes cerrar esta pestaña y volver a <a href="${back}">${back}</a>.</p>`);
   } catch (e) {
-    console.error('OAuth callback error:', e?.response?.data || e);
-    res.status(500).send('Error intercambiando el código OAuth.');
+    console.error('OAuth callback error:', e?.response?.data || e?.data || e?.message || e);
+    const msg = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'Error';
+    res.status(500).send(`Error intercambiando el código OAuth: ${msg}`);
   }
 });
 
