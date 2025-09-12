@@ -1,4 +1,4 @@
-// api/server.js — Gmail + Netflix classifier + Latest Mail (refactor a Postgres tokens)
+// api/server.js — Gmail + Netflix classifier + Latest Mail (tokens en Postgres)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -6,7 +6,7 @@ import { google } from 'googleapis';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-// tokenStore debe estar en api/lib/tokenStore.js (CommonJS)
+// tokenStore CommonJS: api/lib/tokenStore.cjs
 const { saveToken, loadAnyToken } = require('./lib/tokenStore.cjs');
 
 /* ================== Config ================== */
@@ -14,8 +14,8 @@ const app = express();
 
 const PORT = Number(process.env.PORT || 3001);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
-
 const REDIRECT_URI = process.env.OAUTH_REDIRECT_URI;
+
 if (!REDIRECT_URI) {
   console.error('❌ Falta OAUTH_REDIRECT_URI en env');
   process.exit(1);
@@ -69,7 +69,6 @@ function isAllowedEmail(email) {
 
 /* ================ Helpers de Gmail (DB + auto-refresh) ================ */
 async function getGmail() {
-  // Para tu caso (una sola cuenta), usamos "cualquier" token guardado
   const t = await loadAnyToken();
   if (!t) {
     const err = new Error('NO_AUTH');
@@ -106,57 +105,78 @@ async function getGmail() {
 }
 
 /* ================ OAuth endpoints ================ */
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'openid',
+  'email',
+  'profile',
+];
+
 app.get('/api/auth/status', async (_req, res) => {
-  const t = await loadAnyToken();
-  res.json({ ok: true, authorized: !!t, email: t?.email ?? null });
+  try {
+    const t = await loadAnyToken();
+    res.json({ ok: true, authorized: !!t, email: t?.email ?? null });
+  } catch {
+    res.json({ ok: true, authorized: false, email: null });
+  }
 });
 
 async function handleAuthUrl(req, res) {
-  const scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
+  const existing = await loadAnyToken(); // si ya hay refresh_token, no forzamos consent
 
-  // Sólo pedimos "consent" si aún NO tenemos refresh_token guardado
-  const existing = await loadAnyToken();
   const url = baseOAuth2.generateAuthUrl({
     access_type: 'offline',
     include_granted_scopes: true,
-    scope: scopes,
+    scope: SCOPES,
     redirect_uri: REDIRECT_URI,
     prompt: existing ? undefined : 'consent',
-    // opcional: login_hint: req.query.email
+    login_hint: typeof req.query.email === 'string' && req.query.email ? req.query.email : undefined,
   });
 
-  if ((req.headers.accept || '').includes('application/json')) return res.json({ ok: true, url });
+  if ((req.headers.accept || '').includes('application/json')) {
+    return res.json({ ok: true, url });
+  }
   return res.redirect(url);
 }
+
 app.get('/api/auth', handleAuthUrl);
 app.get('/api/oauth2/auth', handleAuthUrl);
 
-// --- reemplaza COMPLETO tu handler actual ---
 app.get('/api/oauth2/callback', async (req, res) => {
   try {
     const { code } = req.query;
     if (!code) return res.status(400).send('Falta "code".');
 
-    // usa EXACTAMENTE el mismo redirect_uri que usaste al generar el auth URL
+    // Importante: usar el mismo redirect_uri que al generar la URL
     const { tokens } = await baseOAuth2.getToken({ code, redirect_uri: REDIRECT_URI });
     baseOAuth2.setCredentials(tokens);
 
-    // trae identidad (email) para guardar quien autorizó
+    // Identidad del usuario (email) sin verifyIdToken
     const oauth2 = google.oauth2({ auth: baseOAuth2, version: 'v2' });
-    const { data } = await oauth2.userinfo.get();   // -> { id, email, ... }
+    const { data } = await oauth2.userinfo.get(); // { id, email, ... }
+
+    // Guardamos tokens. Si Google no devuelve refresh_token (ya concedido),
+    // conservamos el que ya estaba en DB.
+    const current = await loadAnyToken();
+    const refresh = tokens.refresh_token || current?.refresh_token || null;
+
     await saveToken({
       sub: data.id,
       email: data.email,
       access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token, // 1ª vez debe venir
-      expiry: tokens.expiry_date
+      refresh_token: refresh,
+      expiry: tokens.expiry_date,
     });
 
     const back = String(FRONTEND_ORIGIN).replace(/\/$/, '');
     res.send(`<h2>✅ Autorizado.</h2><p>Ya puedes cerrar esta pestaña y volver a <a href="${back}">${back}</a>.</p>`);
   } catch (e) {
     console.error('OAuth callback error:', e?.response?.data || e?.data || e?.message || e);
-    const msg = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'Error';
+    const msg =
+      e?.response?.data?.error_description ||
+      e?.response?.data?.error ||
+      e?.message ||
+      'Error';
     res.status(500).send(`Error intercambiando el código OAuth: ${msg}`);
   }
 });
@@ -254,7 +274,7 @@ function classifyNetflix(subject, combinedBody) {
   const isAccessTemporalByText = /\b(c[oó]digo de acceso temporal|temporary access code)\b/i.test(lc);
 
   if (isTravelByLink || isAccessTemporalByText) {
-    return { kind: 'access_code' };
+    return { kind: 'access_code' }; // mostramos el HTML completo
   }
 
   // Nada de PIN, nuevo dispositivo, reset, etc.
@@ -281,11 +301,6 @@ async function confirmHome(url) {
 }
 
 /* ================ /api/mail/latest (FILTRADO) ================ */
-/** Trae el mensaje más reciente del alias que sea:
- *   - "Tu código de acceso temporal" (access_code)
- *   - "Actualizar hogar" (home_link)
- * Si no hay ninguno, 404.
- */
 app.post('/api/mail/latest', async (req, res) => {
   try {
     const alias = (req.body?.alias || req.body?.email || '').toLowerCase().trim();
@@ -298,7 +313,7 @@ app.post('/api/mail/latest', async (req, res) => {
     const g = await getGmail(); // cliente con auto-refresh
     const aliasFilter = `(to:"${alias}" OR deliveredto:"${alias}")`;
 
-    // Reducimos a remitentes de Netflix para bajar ruido
+    // Reducimos remitentes a Netflix
     const fromNetflix =
       '(from:netflix.com OR from:account.netflix.com OR from:mailer.netflix.com OR ' +
       'from:no-reply@account.netflix.com OR from:info@account.netflix.com OR ' +
@@ -331,11 +346,11 @@ app.post('/api/mail/latest', async (req, res) => {
     for (const d of details) {
       const full = d.data;
       const headers = full.payload?.headers || [];
-      const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';
+      const subject = (headers.find(h => h.name === 'Subject') || {})?.value || '';
       const { plain, html, combined } = extractBodies(full.payload);
 
       const cls = classifyNetflix(subject, combined);
-      if (!allowedKinds.has(cls.kind)) continue; // ignora PIN, nuevo dispositivo, etc.
+      if (!allowedKinds.has(cls.kind)) continue;
 
       chosen = { full, html, plain, kind: cls.kind };
       break; // el más reciente que cumple
