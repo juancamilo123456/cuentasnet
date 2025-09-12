@@ -7,7 +7,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 // tokenStore debe estar en api/lib/tokenStore.js (CommonJS)
-const { saveToken, loadAnyToken } = require('./lib/tokenStore.js');
+const { saveToken, loadAnyToken } = require('./lib/tokenStore.cjs');
 
 /* ================== Config ================== */
 const app = express();
