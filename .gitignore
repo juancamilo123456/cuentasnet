@@ -1,0 +1,46 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node
+node_modules
+/api/node_modules/
+/frontend/node_modules/
+
+# Builds
+dist
+dist-ssr
+.vite
+coverage
+
+# Local config
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Env files (ignore all .env everywhere)
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Keep examples
+!api/.env.example
+!frontend/.env.example
+
+# Project-specific
+/api/.token.json
+/api/.env
+/frontend/.env

@@ -29,7 +29,15 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
 const AUTO_CONFIRM_HOME = process.env.AUTO_CONFIRM_HOME === '1';
 const NETFLIX_CONFIRM_HOME_URL = process.env.NETFLIX_CONFIRM_HOME_URL || '';
 
-app.use(cors({ origin: FRONTEND_ORIGIN, credentials: false }));
+const origins = String(FRONTEND_ORIGIN)
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: origins.length ? origins : true, // http://localhost:5173,https://tu-front.onrender.com
+  credentials: true,
+}));
 app.use(express.json());
 
 /* ================ OAuth2 (cliente base) ================= */
@@ -70,7 +78,9 @@ function isAllowedEmail(email) {
 /* ================ Helpers de Gmail (DB + auto-refresh) ================ */
 async function getGmail() {
   const t = await loadAnyToken();
-  if (!t) {
+
+  // Debe existir refresh_token (viene de env o /tmp por tu nuevo tokenStore)
+  if (!t || !t.refresh_token) {
     const err = new Error('NO_AUTH');
     err.code = 'NO_AUTH';
     throw err;
@@ -83,22 +93,27 @@ async function getGmail() {
   );
 
   o2.setCredentials({
-    access_token: t.access_token,
     refresh_token: t.refresh_token,
-    expiry_date: t.expiry,
+    access_token: t.access_token || undefined,
+    expiry_date: t.expiry || 0,
   });
 
-  // Refresca si está por vencer (<60s)
-  if (!t.expiry || Date.now() > t.expiry - 60_000) {
-    const { credentials } = await o2.refreshAccessToken();
-    await saveToken({
-      sub: t.sub,
-      email: t.email,
-      access_token: credentials.access_token,
-      refresh_token: credentials.refresh_token || t.refresh_token,
-      expiry: credentials.expiry_date,
-    });
-    o2.setCredentials(credentials);
+  // Si no hay access_token o está por expirar, pídelo silenciosamente
+  const needRefresh = !t.access_token || !t.expiry || Date.now() > (t.expiry - 60_000);
+  if (needRefresh) {
+    const { token } = await o2.getAccessToken();   // sin pedir login
+    if (token) {
+      await saveToken({
+        access_token: token,
+        refresh_token: t.refresh_token,            // conserva el que ya tienes
+        expiry: Date.now() + 50 * 60 * 1000,       // ~50 min
+      });
+      o2.setCredentials({
+        refresh_token: t.refresh_token,
+        access_token: token,
+        expiry_date: Date.now() + 50 * 60 * 1000,
+      });
+    }
   }
 
   return google.gmail({ version: 'v1', auth: o2 });
@@ -147,19 +162,22 @@ app.get('/api/oauth2/callback', async (req, res) => {
     const { code } = req.query;
     if (!code) return res.status(400).send('Falta "code".');
 
-    // Importante: usar el mismo redirect_uri que al generar la URL
+    // Usa el MISMO redirect_uri que se usó para generar la URL
     const { tokens } = await baseOAuth2.getToken({ code, redirect_uri: REDIRECT_URI });
     baseOAuth2.setCredentials(tokens);
 
-    // Identidad del usuario (email) sin verifyIdToken
+    // 👇 Log útil (solo para la primera vez)
+    console.log("REFRESH_TOKEN:", tokens.refresh_token || "(no enviado, ya existía)");
+
+    // Identidad del usuario (sin verifyIdToken)
     const oauth2 = google.oauth2({ auth: baseOAuth2, version: 'v2' });
     const { data } = await oauth2.userinfo.get(); // { id, email, ... }
 
-    // Guardamos tokens. Si Google no devuelve refresh_token (ya concedido),
-    // conservamos el que ya estaba en DB.
+    // Si Google no manda refresh_token (porque ya se concedió antes),
+    // conservamos el que ya existe.
     const current = await loadAnyToken();
     const refresh = tokens.refresh_token || current?.refresh_token || null;
-
+    
     await saveToken({
       sub: data.id,
       email: data.email,
@@ -307,10 +325,12 @@ app.post('/api/mail/latest', async (req, res) => {
     if (!alias) return res.status(400).json({ ok: false, error: 'Falta alias/email' });
     if (!isAllowedEmail(alias)) return res.status(403).json({ ok: false, error: 'Email no autorizado' });
 
-    const t = await loadAnyToken();
-    if (!t) return res.status(401).json({ ok: false, needsAuth: true });
+  const t = await loadAnyToken();
+if (!t || !t.refresh_token) {
+  return res.status(401).json({ ok: false, needsAuth: true });
+}
 
-    const g = await getGmail(); // cliente con auto-refresh
+const g = await getGmail();
     const aliasFilter = `(to:"${alias}" OR deliveredto:"${alias}")`;
 
     // Reducimos remitentes a Netflix
