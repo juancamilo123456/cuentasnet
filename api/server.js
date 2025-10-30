@@ -317,36 +317,62 @@ async function confirmHome(url) {
     return { status: 'failed', message: 'No se pudo actualizar el hogar' };
   }
 }
+// === Cache simple por alias (TTL 60s) ===
+const LATEST_CACHE = new Map(); // key: alias, value: { ts, payload }
+const CACHE_TTL_MS = 60_000;
+
+function cacheGet(alias) {
+  const hit = LATEST_CACHE.get(alias);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) {
+    LATEST_CACHE.delete(alias);
+    return null;
+  }
+  return hit.payload;
+}
+
+function cacheSet(alias, payload) {
+  LATEST_CACHE.set(alias, { ts: Date.now(), payload });
+}
 
 /* ================ /api/mail/latest (FILTRADO) ================ */
+/* ================ /api/mail/latest (FILTRADO + RÁPIDO) ================ */
 app.post('/api/mail/latest', async (req, res) => {
   try {
     const alias = (req.body?.alias || req.body?.email || '').toLowerCase().trim();
     if (!alias) return res.status(400).json({ ok: false, error: 'Falta alias/email' });
     if (!isAllowedEmail(alias)) return res.status(403).json({ ok: false, error: 'Email no autorizado' });
 
-  const t = await loadAnyToken();
-if (!t || !t.refresh_token) {
-  return res.status(401).json({ ok: false, needsAuth: true });
-}
+    // 0) Cache caliente (60s) → respuesta instantánea si se repite mismo alias
+    const cached = cacheGet(alias);
+    if (cached) return res.json(cached);
 
-const g = await getGmail();
+    // 1) Autorización presente (refresh token)
+    const t = await loadAnyToken();
+    if (!t || !t.refresh_token) {
+      return res.status(401).json({ ok: false, needsAuth: true });
+    }
+
+    const g = await getGmail();
+
+    // 2) Query estrecha: alias + remitentes Netflix + últimos 7 días
     const aliasFilter = `(to:"${alias}" OR deliveredto:"${alias}")`;
-
-    // Reducimos remitentes a Netflix
     const fromNetflix =
       '(from:netflix.com OR from:account.netflix.com OR from:mailer.netflix.com OR ' +
       'from:no-reply@account.netflix.com OR from:info@account.netflix.com OR ' +
       'from:member@mailer.netflix.com OR from:accounts@netflix.com)';
+    const recent = 'newer_than:1d'; // ajusta a 3d/14d si quieres
 
-    const q = [aliasFilter, fromNetflix].join(' ');
+    const q = [aliasFilter, fromNetflix, recent].join(' ');
 
+    // 3) Trae SOLO IDs recientes (pocos) con partial response
     const list = await g.users.messages.list({
       userId: 'me',
       q,
       labelIds: ['INBOX'],
       includeSpamTrash: false,
-      maxResults: 50,
+      maxResults: 15,
+      fields: 'messages(id,threadId),resultSizeEstimate'
     });
 
     const msgs = list.data.messages || [];
@@ -354,42 +380,93 @@ const g = await getGmail();
       return res.status(404).json({ ok: false, error: 'No se encontró ningún correo para ese alias.' });
     }
 
-    // Traemos detalles y ordenamos más reciente primero
-    const details = await Promise.all(
-      msgs.map(m => g.users.messages.get({ userId: 'me', id: m.id, format: 'full' }))
+    // 4) Fase A — METADATA primero (rápido): subject/from/date/snippet
+    const TOP = Math.min(15, msgs.length);
+    const metaDetails = await Promise.all(
+      msgs.slice(0, TOP).map(m =>
+        g.users.messages.get({
+          userId: 'me',
+          id: m.id,
+          format: 'metadata',
+          metadataHeaders: ['Subject', 'From', 'To', 'Delivered-To', 'Date'],
+          fields: 'id,threadId,internalDate,payload/headers,snippet'
+        })
+      )
     );
-    details.sort((a, b) => Number(b.data.internalDate || 0) - Number(a.data.internalDate || 0));
 
+    // 5) Clasificar por subject/snippet sin bajar cuerpo completo aún
     const allowedKinds = new Set(['access_code', 'home_link']);
-    let chosen = null;
+    let candidateMeta = null;
 
-    for (const d of details) {
-      const full = d.data;
+    for (const d of metaDetails) {
+      const basic = d.data;
+      const headers = basic.payload?.headers || [];
+      const subject = (headers.find(h => h.name === 'Subject') || {})?.value || '';
+      const combinedLight = [subject, basic.snippet || ''].join('\n');
+      const cls = classifyNetflix(subject, combinedLight);
+      if (allowedKinds.has(cls.kind)) {
+        candidateMeta = { id: basic.id, threadId: basic.threadId, internalDate: basic.internalDate, cls };
+        break;
+      }
+    }
+
+    // 6) Si no hay candidato por metadata, baja "full" de los 3 más recientes
+    let chosenFull = null;
+    const TRY_FULL = candidateMeta ? 0 : Math.min(3, metaDetails.length);
+    if (!candidateMeta && TRY_FULL > 0) {
+      for (let i = 0; i < TRY_FULL; i++) {
+        const id = metaDetails[i].data.id;
+        const fullResp = await g.users.messages.get({
+          userId: 'me',
+          id,
+          format: 'full',
+          fields: 'id,threadId,internalDate,payload/headers,payload/mimeType,payload/parts,payload/body,snippet'
+        });
+        const full = fullResp.data;
+        const headers = full.payload?.headers || [];
+        const subject = (headers.find(h => h.name === 'Subject') || {})?.value || '';
+        const { plain, html, combined } = extractBodies(full.payload);
+        const cls = classifyNetflix(subject, combined);
+        if (allowedKinds.has(cls.kind)) {
+          chosenFull = { full, plain, html, kind: cls.kind };
+          break;
+        }
+      }
+    }
+
+    // 7) Si había candidateMeta, baja SOLO ese "full" ahora
+    if (candidateMeta && !chosenFull) {
+      const fullResp = await g.users.messages.get({
+        userId: 'me',
+        id: candidateMeta.id,
+        format: 'full',
+        fields: 'id,threadId,internalDate,payload/headers,payload/mimeType,payload/parts,payload/body,snippet'
+      });
+      const full = fullResp.data;
       const headers = full.payload?.headers || [];
       const subject = (headers.find(h => h.name === 'Subject') || {})?.value || '';
       const { plain, html, combined } = extractBodies(full.payload);
-
       const cls = classifyNetflix(subject, combined);
-      if (!allowedKinds.has(cls.kind)) continue;
-
-      chosen = { full, html, plain, kind: cls.kind };
-      break; // el más reciente que cumple
+      if (allowedKinds.has(cls.kind)) {
+        chosenFull = { full, plain, html, kind: cls.kind };
+      }
     }
 
-    if (!chosen) {
-      return res.status(404).json({ ok: false, error: 'No hay correos de acceso temporal ni de actualizar hogar para ese alias.' });
+    if (!chosenFull) {
+      return res.status(404).json({ ok: false, error: 'No hay correos recientes de acceso temporal ni de actualizar hogar para este correo.' });
     }
 
+    // 8) Construir respuesta igual a la tuya y cachear 60s
     const headers = {};
-    for (const h of chosen.full.payload?.headers || []) headers[h.name] = h.value;
+    for (const h of chosenFull.full.payload?.headers || []) headers[h.name] = h.value;
 
-    return res.json({
+    const payload = {
       ok: true,
-      kind: chosen.kind,
-      id: chosen.full.id,
-      threadId: chosen.full.threadId,
-      internalDate: chosen.full.internalDate,
-      snippet: chosen.full.snippet,
+      kind: chosenFull.kind,
+      id: chosenFull.full.id,
+      threadId: chosenFull.full.threadId,
+      internalDate: chosenFull.full.internalDate,
+      snippet: chosenFull.full.snippet,
       headers: {
         from: headers['From'],
         to: headers['To'],
@@ -397,15 +474,19 @@ const g = await getGmail();
         date: headers['Date'],
         subject: headers['Subject'],
       },
-      html: chosen.html || null,
-      text: chosen.html ? null : (chosen.plain || null),
-    });
+      html: chosenFull.html || null,
+      text: chosenFull.html ? null : (chosenFull.plain || null),
+    };
+
+    cacheSet(alias, payload);
+    return res.json(payload);
+
   } catch (e) {
     const ge = e?.response?.data?.error || e?.errors?.[0]?.message;
     if (e?.code === 'NO_AUTH' || ge === 'invalid_grant') {
       return res.status(401).json({ ok: false, needsAuth: true, error: 'No autorizado o token caducado.' });
     }
-    console.error('Error /api/mail/latest:', e?.response?.data || e);
+    console.error('Error /api/mail/latest (rápido):', e?.response?.data || e);
     return res.status(500).json({ ok: false, error: 'Error consultando Gmail' });
   }
 });

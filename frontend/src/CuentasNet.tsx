@@ -11,6 +11,9 @@ import {
   Link2,
   Timer,
   ChevronRight,
+  AlertTriangle, 
+  MailSearch, 
+  RotateCcw,
 } from "lucide-react";
 
 /* ===================== Tipos ===================== */
@@ -216,15 +219,20 @@ function EmailSearch({
             <option value="multi">Otro</option>
           </select>
 
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-white to-white/80 text-black font-semibold px-5 py-3 disabled:opacity-60"
-            disabled={loading || !emailOk}
-            aria-busy={loading}
-          >
-            <Search className="w-5 h-5" />
-            {loading ? "Buscando…" : "Buscar Código"}
-          </button>
+       <button
+  type="submit"
+  className="inline-flex items-center justify-center gap-2 rounded-2xl
+             bg-gradient-to-r from-rose-500 via-fuchsia-500 to-sky-400
+             text-white font-semibold px-5 py-3 shadow-lg shadow-fuchsia-500/20
+             hover:scale-[1.01] active:scale-[0.99] transition
+             disabled:opacity-60 disabled:saturate-0"
+  disabled={loading || !emailOk}
+  aria-busy={loading}
+>
+  <Search className="w-5 h-5" />
+  {loading ? "Buscando…" : "Buscar Código"}
+</button>
+
         </div>
 
         {!emailOk && email.length > 0 && (
@@ -369,6 +377,7 @@ function LatestMailViewer({
   needsAuth,
   errorMsg,
   onAuth,
+  onRetry,
 }: {
   mail: LatestMail | null;
   searched: boolean;
@@ -376,6 +385,7 @@ function LatestMailViewer({
   needsAuth?: boolean;
   errorMsg?: string | null;
   onAuth?: () => void;
+  onRetry?: () => void;
 }) {
   if (needsAuth) {
     return (
@@ -397,14 +407,55 @@ function LatestMailViewer({
       </div>
     );
   }
+if (errorMsg) {
+  return (
+    <div className="max-w-4xl mx-auto px-6 py-10">
+      {/* wrapper con borde degradado */}
+      <div className="relative rounded-2xl p-[1.5px] bg-gradient-to-r from-rose-500/60 via-fuchsia-500/60 to-sky-400/60">
+        <div className="rounded-2xl bg-black/70 backdrop-blur-xl border border-white/10 p-6 sm:p-7">
+          <div className="flex items-start gap-4">
+            <div className="shrink-0">
+              <div className="w-12 h-12 rounded-xl bg-rose-500/15 grid place-items-center text-rose-300">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+            </div>
 
-  if (errorMsg) {
-    return (
-      <div className="max-w-6xl mx-auto px-6 py-10 text-center text-red-300">
-        {errorMsg}
+            <div className="flex-1">
+              <h4 className="text-white text-lg font-semibold">
+                No se encontraron códigos para este alias
+              </h4>
+              <p className="mt-1 text-white/70 leading-relaxed">
+                {errorMsg}
+              </p>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-white/60">
+                <div className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-1.5">
+                  <MailSearch className="w-4 h-4" />
+                  <span>Prueba con otro alias o busca de nuevo</span>
+                </div>
+                <button
+  type="button"
+  onClick={() => onRetry && onRetry()}
+  className="inline-flex items-center gap-2 rounded-xl bg-white text-black font-medium px-3 py-1.5 hover:opacity-90 transition"
+  title="Reintentar"
+>
+  <RotateCcw className="w-4 h-4" />
+  Reintentar
+</button>
+
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    );
-  }
+
+      {/* nota sutil debajo */}
+      <p className="mt-4 text-center text-xs text-white/45">
+        Consejo: escribe el alias exacto (ej. <code className="text-white/70">usuario+netflix@gmail.com</code>).
+      </p>
+    </div>
+  );
+}
 
   if (!searched && !mail && !loading) {
     return (
@@ -547,6 +598,7 @@ export default function CuentasNet() {
         onAuth={() => {
           window.location.href = api("/api/auth");
         }}
+        onRetry={search}
       />
 
       <footer className="mt-16 py-10 text-center text-white/50 text-xs">
