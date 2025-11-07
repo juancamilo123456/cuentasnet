@@ -14,6 +14,9 @@ import {
   AlertTriangle, 
   MailSearch, 
   RotateCcw,
+  Zap,
+  Check,
+  ChevronDown,
 } from "lucide-react";
 
 /* ===================== Tipos ===================== */
@@ -93,42 +96,62 @@ function GlassCard({
 
 function Header() {
   return (
-    <header className="w-full pt-10 pb-8">
-      <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-white/70 to-white/20 grid place-items-center font-bold text-black/80">
-            CN
-          </div>
-          <h1 className="text-white text-2xl font-semibold tracking-tight">
-            CuentasNet
-          </h1>
-        </div>
-        <div className="text-white/60 text-sm">Panel personal • ultra-seguro</div>
+    <header className="sticky top-0 z-40 bg-ink-900/70 backdrop-blur-md border-b border-white/5">
+      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <a href="/" className="flex items-center gap-2">
+          <span className="text-xl font-bold">
+            Cuentas<span className="text-accent-400">plus</span><span className="text-brand-500">+</span>
+          </span>
+        </a>
+        <nav className="hidden sm:flex items-center gap-6 text-white/80">
+          <a className="hover:text-white" href="https://cuentasplus.onrender.com/#catalogo" target="_blank" rel="noreferrer">Plataforma Cuentasplus+</a>
+        </nav>
+        <a
+          href="https://wa.me/573207389394?text=Hola%20%C2%A1quiero%20comprar!"
+          target="_blank"
+          rel="noreferrer"
+          className="btn-primary hidden sm:inline-flex"
+        >
+          WhatsApp
+        </a>
       </div>
     </header>
   );
 }
-
 function Hero() {
   return (
-    <section className="max-w-4xl mx-auto px-6 text-center">
-      <motion.h2
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="text-4xl md:text-6xl leading-tight font-extrabold tracking-tight text-white"
-      >
-        Gestión segura y rápida de <br />
-        <span className="text-white/90">códigos de acceso</span>
-      </motion.h2>
+    <section className="max-w-6xl mx-auto px-6 pt-10 text-center">
+      {/* Badges superiores */}
+      <div className="flex justify-center gap-3 mb-4">
+        <span className="badge">
+          <Zap className="w-4 h-4 text-blue-300" aria-hidden="true" />
+          Entrega rápida
+        </span>
+        <span className="badge">
+          <Shield className="w-4 h-4 text-purple-300" aria-hidden="true" />
+          Soporte 7/7
+        </span>
+        <span className="badge">
+          <Check className="w-4 h-4 text-green-300" aria-hidden="true" />
+          Pagos seguros
+        </span>
+      </div>
+
+      {/* Título principal */}
+      <h2 className="grad-title text-4xl md:text-6xl font-extrabold leading-tight">
+        Gestión de códigos de acceso,
+        <br className="hidden md:block" />
+        <span className="block">todo en un solo lugar</span>
+      </h2>
+
+      {/* Subtítulo */}
       <p className="mt-4 text-white/70 max-w-2xl mx-auto">
-        Centraliza y recupera tus códigos de verificación de tus plataformas
-        favoritas. Diseñado para tu correo personal y control total.
+        Centraliza y recupera tus códigos de verificación (Netflix, Disney+, etc.).
+        Entrega inmediata y soporte garantizado.
       </p>
     </section>
   );
 }
-
 function ProviderCard({
   p,
   active,
@@ -140,21 +163,27 @@ function ProviderCard({
 }) {
   return (
     <GlassCard
-      className={`p-6 md:p-7 ${p.border} ${p.glow} ${
-        active ? "ring-2 ring-white/30" : "ring-0"
-      } cursor-pointer hover:scale-[1.01] transition`}
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
       onClick={onSelect}
+      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect()}
+      className={`glass p-6 md:p-7 transition hover:scale-[1.01] ${
+        active ? "ring-2 ring-white/20" : ""
+      }`}
     >
       <div className="flex items-start gap-4">
         <div className="w-12 h-12 rounded-2xl bg-white/10 grid place-items-center">
           <ChevronRight className="w-6 h-6 text-white/80" />
         </div>
+
         <div className="flex-1">
           <h3 className="text-white text-lg font-semibold">{p.title}</h3>
+
           <div className="mt-4 grid gap-2">
             {p.perks.map(({ icon: Icon, text }) => (
               <div key={text} className="flex items-center gap-2 text-white/80 text-sm">
-                <Icon className="w-4 h-4" />
+                <Icon className="w-4 h-4" aria-hidden="true" />
                 <span>{text}</span>
               </div>
             ))}
@@ -164,7 +193,57 @@ function ProviderCard({
     </GlassCard>
   );
 }
+function ProviderSelect({
+  value,
+  onChange,
+}: {
+  value: ProviderKey;
+  onChange: (v: ProviderKey) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const current = PROVIDERS.find((p) => p.key === value)!;
 
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setTimeout(() => setOpen(false), 120)}
+        className="w-[140px] rounded-2xl bg-white/10 text-white px-4 py-3 outline-none focus:ring-2 focus:ring-white/40 inline-flex items-center justify-between"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span className="truncate">{current.title}</span>
+        <ChevronDown className="w-4 h-4 opacity-80" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-30 mt-2 w-[200px] rounded-xl bg-[#10131a] border border-white/10 shadow-xl overflow-hidden"
+        >
+          {PROVIDERS.map((p) => (
+            <li
+              key={p.key}
+              role="option"
+              aria-selected={p.key === value}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onChange(p.key);
+                setOpen(false);
+              }}
+              className={`px-4 py-2 cursor-pointer hover:bg-white/10 ${
+                p.key === value ? "bg-white/5 text-white" : "text-white/90"
+              }`}
+            >
+              {p.title}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 function EmailSearch({
   email,
   setEmail,
@@ -181,21 +260,23 @@ function EmailSearch({
   loading: boolean;
 }) {
   const emailOk = /\S+@\S+\.\S+/.test(email);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!loading && emailOk) onSearch();
   };
 
   return (
-    <GlassCard className="max-w-6xl mx-auto mt-10 p-6 sm:p-7">
+    <GlassCard className="glass max-w-6xl mx-auto mt-10 p-6 sm:p-7" id="buscar">
       <form onSubmit={submit} className="px-2 sm:px-3">
         <h4 className="text-white text-xl font-semibold text-center">
           Consulta tu código de acceso
         </h4>
 
         <div className="mt-6 grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3">
+          {/* email */}
           <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/60" />
+            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/60" aria-hidden="true" />
             <input
               type="email"
               inputMode="email"
@@ -208,42 +289,30 @@ function EmailSearch({
             />
           </div>
 
-          <select
-            aria-label="Proveedor"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value as ProviderKey)}
-            className="rounded-2xl bg-white/10 text-white px-4 py-3 outline-none focus:ring-2 focus:ring-white/40"
+          {/* proveedor (dropdown custom) */}
+          <ProviderSelect value={provider} onChange={setProvider} />
+
+          {/* submit */}
+          <button
+            type="submit"
+            className="btn-primary disabled:opacity-60"
+            disabled={loading || !emailOk}
+            aria-busy={loading}
           >
-            <option value="netflix">Netflix</option>
-            <option value="disney">Disney+</option>
-            <option value="multi">Otro</option>
-          </select>
-
-       <button
-  type="submit"
-  className="inline-flex items-center justify-center gap-2 rounded-2xl
-             bg-gradient-to-r from-rose-500 via-fuchsia-500 to-sky-400
-             text-white font-semibold px-5 py-3 shadow-lg shadow-fuchsia-500/20
-             hover:scale-[1.01] active:scale-[0.99] transition
-             disabled:opacity-60 disabled:saturate-0"
-  disabled={loading || !emailOk}
-  aria-busy={loading}
->
-  <Search className="w-5 h-5" />
-  {loading ? "Buscando…" : "Buscar Código"}
-</button>
-
+            <Search className="w-5 h-5" aria-hidden="true" />
+            {loading ? "Buscando…" : "Buscar Código"}
+          </button>
         </div>
 
         {!emailOk && email.length > 0 && (
-          <p className="mt-2 text-xs text-red-300">
-            Ingresa un correo válido para continuar.
-          </p>
+          <p className="mt-2 text-xs text-red-300">Ingresa un correo válido para continuar.</p>
         )}
       </form>
     </GlassCard>
   );
 }
+
+
 
 /* -------- Auto-height para iframe (srcDoc = same-origin) -------- */
 function useAutoHeight() {
@@ -370,6 +439,7 @@ function wrapEmailHtml(raw: string) {
 }
 
 /* ===================== Visor ===================== */
+/* ===================== Visor ===================== */
 function LatestMailViewer({
   mail,
   searched,
@@ -400,79 +470,83 @@ function LatestMailViewer({
               onAuth();
             }
           }}
-          className="inline-flex items-center gap-2 rounded-2xl bg-white text-black font-semibold px-4 py-2"
+          className="btn-primary"
         >
           Autorizar Gmail
         </a>
       </div>
     );
   }
-if (errorMsg) {
-  return (
-    <div className="max-w-4xl mx-auto px-6 py-10">
-      {/* wrapper con borde degradado */}
-      <div className="relative rounded-2xl p-[1.5px] bg-gradient-to-r from-rose-500/60 via-fuchsia-500/60 to-sky-400/60">
-        <div className="rounded-2xl bg-black/70 backdrop-blur-xl border border-white/10 p-6 sm:p-7">
-          <div className="flex items-start gap-4">
-            <div className="shrink-0">
-              <div className="w-12 h-12 rounded-xl bg-rose-500/15 grid place-items-center text-rose-300">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-            </div>
 
-            <div className="flex-1">
-              <h4 className="text-white text-lg font-semibold">
-                No se encontraron códigos para este alias
-              </h4>
-              <p className="mt-1 text-white/70 leading-relaxed">
-                {errorMsg}
-              </p>
-
-              <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-white/60">
-                <div className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-1.5">
-                  <MailSearch className="w-4 h-4" />
-                  <span>Prueba con otro alias o busca de nuevo</span>
+  if (errorMsg) {
+    return (
+      <div className="max-w-4xl mx-auto px-6 py-10">
+        {/* Borde degradado + vidrio */}
+        <div className="relative rounded-2xl p-[1.5px] bg-gradient-to-r from-rose-500/60 via-fuchsia-500/60 to-sky-400/60">
+          <div className="rounded-2xl bg-black/70 backdrop-blur-xl border border-white/10 p-6 sm:p-7">
+            <div className="flex items-start gap-4">
+              <div className="shrink-0">
+                <div className="w-12 h-12 rounded-xl bg-rose-500/15 grid place-items-center text-rose-300">
+                  <AlertTriangle className="w-6 h-6" />
                 </div>
-                <button
-  type="button"
-  onClick={() => onRetry && onRetry()}
-  className="inline-flex items-center gap-2 rounded-xl bg-white text-black font-medium px-3 py-1.5 hover:opacity-90 transition"
-  title="Reintentar"
->
-  <RotateCcw className="w-4 h-4" />
-  Reintentar
-</button>
+              </div>
 
+              <div className="flex-1">
+                <h4 className="text-white text-lg font-semibold">
+                  No se encontraron códigos para este alias
+                </h4>
+                <p className="mt-1 text-white/70 leading-relaxed">
+                  {errorMsg}
+                </p>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-white/70">
+                  <div className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-1.5">
+                    <MailSearch className="w-4 h-4" />
+                    <span>Prueba con otro alias o busca de nuevo</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onRetry && onRetry()}
+                    className="btn-primary"
+                    title="Reintentar"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Reintentar
+                  </button>
+                </div>
+
+                <p className="mt-3 text-xs text-white/50">
+                  Consejo: escribe el alias exacto (ej. <span className="font-mono">usuario+netflix@gmail.com</span>).
+                </p>
               </div>
             </div>
           </div>
         </div>
       </div>
-
-      {/* nota sutil debajo */}
-      <p className="mt-4 text-center text-xs text-white/45">
-        Consejo: escribe el alias exacto (ej. <code className="text-white/70">usuario+netflix@gmail.com</code>).
-      </p>
-    </div>
-  );
-}
+    );
+  }
 
   if (!searched && !mail && !loading) {
     return (
       <div className="max-w-6xl mx-auto px-6 py-16 text-center text-white/70">
         <div className="text-7xl mb-4">🔍</div>
-        <p>Ingresa tu correo y buscaremos el correo más reciente.</p>
+        <p>Ingresa el correo y buscaremos el codigo de acceso o actualizacion hogar.</p>
       </div>
     );
   }
 
-  if (loading) {
-    return (
-      <div className="max-w-6xl mx-auto px-6 py-16 text-center text-white/70">
-        <div className="text-2xl">Buscando…</div>
+if (loading) {
+  return (
+    <div className="max-w-6xl mx-auto px-6 py-16">
+      <div className="flex flex-col items-center gap-5 text-center">
+        <div className="spinner-ring" aria-label="Cargando" />
+        <p className="text-white/70">Buscando…</p>
       </div>
-    );
-  }
+    </div>
+  );
+}
+
 
   if (!mail) {
     return (
@@ -486,11 +560,11 @@ if (errorMsg) {
     );
   }
 
+  // === visor ===
   const { ref, onLoad } = useAutoHeight();
 
   return (
     <div className="max-w-6xl mx-auto px-6">
-      {/* Sin título ni marco exterior; solo el iframe limpio */}
       <div className="mt-2">
         {mail.html ? (
           <iframe
@@ -518,6 +592,7 @@ if (errorMsg) {
     </div>
   );
 }
+
 
 /* ===================== Página principal ===================== */
 export default function CuentasNet() {
@@ -565,7 +640,7 @@ export default function CuentasNet() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-aurora text-white">
+   <div className="min-h-screen w-full bg-site text-white">
       <Header />
       <Hero />
 
