@@ -1,25 +1,150 @@
 /* src/index.css */
 @import "tailwindcss";
 
-/* 👇 MUY IMPORTANTE EN TAILWIND v4: dile dónde escanear clases */
+/* Dile a Tailwind qué escanear (v4) */
 @source "../index.html";
 @source "./**/*.{ts,tsx,js,jsx}";
 
-/* Base mínima */
+/* =====================
+   Theme tokens (CSS vars)
+   ===================== */
+@theme {
+  /* Sombras (usamos las variables, no utilidades Tailwind personalizadas) */
+  --shadow-card: 0 12px 40px rgba(0, 0, 0, .35),
+                 0 0 1px rgba(255, 255, 255, .06),
+                 0 12px 30px -12px rgba(0, 0, 0, .35);
+
+  --shadow-glow: 0 0 1px rgba(255, 255, 255, .06),
+                 0 18px 48px rgba(34, 197, 244, .40);
+
+  /* Radio personalizado para tarjetas glass */
+  --radius-2-5xl: 1.25rem;
+
+  /* Colores de acento por si quieres referenciarlos */
+  --color-accent-500: #06b6d4; /* cyan */
+  --color-accent-600: #0891b2;
+}
+
+/* =====================
+   Base
+   ===================== */
 :root { color-scheme: dark; }
 html, body, #root { height: 100%; }
 * { box-sizing: border-box; }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
-  background: #0b0c10;
-  color: white;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background: #0B0E14;
+  color: #fff;
 }
 
-/* Fondo con halos */
-.bg-aurora {
+/* =====================
+   Fondo estilo Cuentasplus+
+   ===================== */
+/* Equivalente a: bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 */
+.bg-site {
+  background: linear-gradient(180deg, #0b0e14 0%, #111827 50%, #0b0e14 100%);
+}
+
+/* =====================
+   Botones
+   ===================== */
+
+/* Botón primario (CTA azul→morado, como en la tienda) */
+.btn-primary {
+  /* Tailwind-ish: bg-gradient-to-r from-blue-600 to-purple-600 */
+  background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .75rem 1.25rem;
+  border-radius: 1rem;
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+  transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+}
+.btn-primary:hover { filter: brightness(1.06); box-shadow: 0 14px 40px rgba(124, 58, 237, .35); }
+.btn-primary:active { transform: scale(.985); }
+
+/* Botón secundario “vidrio” gris (como tu botón secundario de la landing) */
+.btn-ghost {
+  background: rgba(31, 41, 55, 0.9);   /* gray-800 */
+  color: #fff;
+  border: 1px solid #374151;           /* gray-700 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .75rem 1.25rem;
+  border-radius: 1rem;
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+  transition: background .15s ease, filter .15s ease, transform .15s ease;
+}
+.btn-ghost:hover { background: rgba(55, 65, 81, 0.95); } /* gray-700 */
+.btn-ghost:active { transform: scale(.985); }
+
+/* =====================
+   Tarjetas y badges
+   ===================== */
+
+/* Tarjeta “glass” (gris a juego con la tienda) */
+.glass {
+  background: rgba(17, 24, 39, 0.9);   /* gray-900 */
+  border: 1px solid #1f2937;           /* gray-800 */
+  backdrop-filter: blur(10px);
+  border-radius: var(--radius-2-5xl);
+  box-shadow: var(--shadow-glow);
+}
+
+/* Badge (Entrega rápida / Soporte / Pagos) */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .25rem .75rem;
+  border-radius: 9999px;
+  font-size: .875rem;
+  background: rgba(31, 41, 55, .8);      /* gray-800 */
+  border: 1px solid rgba(55, 65, 81, .9); /* gray-700 */
+  color: rgba(229, 231, 235, .85);        /* gray-200 */
+}
+
+/* =====================
+   Títulos
+   ===================== */
+/* Gradiente de título igual al hero de la tienda:
+   from-blue-400 via-purple-400 to-pink-400 */
+.grad-title {
+  background: linear-gradient(90deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.spinner-ring {
+  --size: 64px;           /* cámbialo si quieres */
+  --thickness: 8px;       /* ancho del anillo */
+  --track: rgba(255,255,255,.08);
+
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+
+  /* pista gris suave + arco degradé */
   background:
-    radial-gradient(60rem 60rem at 10% -10%, rgba(239,68,68,.15), transparent 70%),
-    radial-gradient(60rem 60rem at 90% 120%, rgba(56,189,248,.15), transparent 70%),
-    #0b0c10;
+    radial-gradient(farthest-side, var(--track) 98%, transparent) top / 100% 100% no-repeat,
+    conic-gradient(from 0deg, #7c3aed, #22d3ee, #06b6d4, #7c3aed);
+
+  /* agujero interior del anillo */
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - var(--thickness)), #000 0);
+          mask: radial-gradient(farthest-side, transparent calc(100% - var(--thickness)), #000 0);
+
+  animation: spinner-rotate 1s linear infinite;
+  filter: drop-shadow(0 0 24px rgba(34,197,244,.35));
+}
+
+@keyframes spinner-rotate {
+  to { transform: rotate(1turn); }
 }

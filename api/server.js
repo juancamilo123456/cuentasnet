@@ -361,7 +361,7 @@ app.post('/api/mail/latest', async (req, res) => {
       '(from:netflix.com OR from:account.netflix.com OR from:mailer.netflix.com OR ' +
       'from:no-reply@account.netflix.com OR from:info@account.netflix.com OR ' +
       'from:member@mailer.netflix.com OR from:accounts@netflix.com)';
-    const recent = 'newer_than:1d'; // ajusta a 3d/14d si quieres
+    const recent = 'newer_than:2d'; // ajusta a 3d/14d si quieres
 
     const q = [aliasFilter, fromNetflix, recent].join(' ');
 
